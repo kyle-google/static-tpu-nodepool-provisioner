@@ -16,6 +16,7 @@ type mockProvider struct {
 	gke                    *cloud.GKE
 	deleted                map[string]time.Time
 	staticNodepoolsCreated map[string]cloud.NodePoolRef
+	configsCreated         map[string]*cloud.StaticNodePoolConfig
 	ensureCalls            int
 	deleteCalls            int
 }
@@ -25,6 +26,7 @@ func newMockProvider(gke *cloud.GKE) *mockProvider {
 		gke:                    gke,
 		deleted:                make(map[string]time.Time),
 		staticNodepoolsCreated: make(map[string]cloud.NodePoolRef),
+		configsCreated:         make(map[string]*cloud.StaticNodePoolConfig),
 	}
 }
 
@@ -74,6 +76,7 @@ func (p *mockProvider) EnsureStaticNodePools(ctx context.Context, desiredNodePoo
 			Labels:       np.Config.Labels,
 			SubblockName: subblockName,
 		}
+		p.configsCreated[desired.Name] = desired.Config
 		p.Unlock()
 	}
 	return nil
@@ -107,6 +110,7 @@ func (p *mockProvider) DeleteNodePool(name string, eventObj client.Object, why s
 		p.deleted[name] = time.Now()
 	}
 	delete(p.staticNodepoolsCreated, name)
+	delete(p.configsCreated, name)
 	return nil
 }
 
@@ -115,4 +119,11 @@ func (p *mockProvider) getDeleted(name string) (time.Time, bool) {
 	defer p.Unlock()
 	timestamp, exists := p.deleted[name]
 	return timestamp, exists
+}
+
+func (p *mockProvider) getConfig(name string) (*cloud.StaticNodePoolConfig, bool) {
+	p.Lock()
+	defer p.Unlock()
+	cfg, exists := p.configsCreated[name]
+	return cfg, exists
 }

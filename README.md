@@ -30,11 +30,28 @@ metadata:
 data:
   reservations: |
     - name: "my-gsc-reservation"
-      gscBlocks:
-        - name: "block-alpha"
+      gscSubblocks:
+        - block: "block-1"
           subblocks: "0001-0004"
-          nodepoolPrefix: "alpha-pool"
-  nodepoolConfig: |
+          nodepoolConfig:
+            nodepoolPrefix: "example-1"
+            machineType: "tpu7x-standard-4t"
+            topology: "4x4x4"
+            nodeCount: 16
+        - block: "block-1"
+          subblocks: "0005"
+          nodepoolConfig:
+            nodepoolPrefix: "example-2"
+            machineType: "tpu7x-standard-4t"
+            topology: "2x2x4"
+            nodeCount: 8
+        - block: "block-2"
+          subblocks: "0001-0002"
+          nodepoolConfig:
+            nodepoolPrefix: "example-3"
+  # Default/fallback config map applied to all nodepools unless overridden at the subblock level
+  defaultNodepoolConfig: |
+    nodepoolPrefix: "example"
     machineType: "tpu7x-standard-4t"
     accelerator: "tpu7x"
     topology: "4x4x4"
@@ -50,15 +67,16 @@ data:
 ### Parameter Explanations
 
 #### `reservations`
-A list of GSC reservations containing blocks:
+A list of GSC reservations each containing a list of subblocks:
 - **`name`**: The exact GCP reservation name.
-- **`gscBlocks`**: The list of blocks mapped to GSC subblocks.
-  - **`name`**: The GSC block identifier.
+- **`gscSubblocks`**: The list of subblocks.
+  - **`block`**: The GSC block identifier.
   - **`subblocks`**: Subblock index range to target (e.g., `"0001-0004"` or a single index `"0002"`).
-  - **`nodepoolPrefix`** *(Optional)*: Prefix for created node pool names. If omitted, uses the block name.
+  - **`nodepoolConfig`** *(Optional)*: Override defaults or define custom GKE NodePool configurations on a per-subblock-range basis. Fields specified here override or augment the root-level fallback `defaultNodepoolConfig` field-by-field.
 
-#### `nodepoolConfig`
-Configuration attributes applied to all spawned node pools:
+#### `defaultNodepoolConfig` (and `nodepoolConfig` under subblocks)
+Configuration attributes applied as defaults/fallbacks (or on a per-subblock level):
+- **`nodepoolPrefix`** *(Optional)*: Prefix for created node pool names. If omitted, falls back to the default config prefix, then to using the block name.
 - **`machineType`**: The GKE machine type to use (e.g., `tpu7x-standard-4t`).
 - **`accelerator`**: The TPU accelerator type.
 - **`topology`**: Network physical topology (e.g., `4x4x4`).

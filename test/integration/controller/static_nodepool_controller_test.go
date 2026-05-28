@@ -26,12 +26,13 @@ var _ = Describe("Static Nodepool controller", func() {
 				Data: map[string]string{
 					"reservations": `
 - name: "reservation-1"
-  gscBlocks:
-  - name: "gsc-block-1"
+  gscSubblocks:
+  - block: "gsc-block-1"
     subblocks: "0001-0002"
-    nodepoolPrefix: "test-nodepool"
+    nodepoolConfig:
+      nodepoolPrefix: "test-nodepool"
 `,
-					"nodepoolConfig": `
+					"defaultNodepoolConfig": `
 machineType: "tpu7x"
 `,
 				},
@@ -67,12 +68,13 @@ machineType: "tpu7x"
 				Data: map[string]string{
 					"reservations": `
 - name: "reservation-to-update"
-  gscBlocks:
-  - name: "gsc-block-to-update"
+  gscSubblocks:
+  - block: "gsc-block-to-update"
     subblocks: "0001-0002"
-    nodepoolPrefix: "update-test-nodepool"
+    nodepoolConfig:
+      nodepoolPrefix: "update-test-nodepool"
 `,
-					"nodepoolConfig": `
+					"defaultNodepoolConfig": `
 machineType: "tpu7x"
 `,
 				},
@@ -103,10 +105,11 @@ machineType: "tpu7x"
 			// Update the configmap
 			cm.Data["reservations"] = `
 - name: "reservation-to-update"
-  gscBlocks:
-  - name: "gsc-block-to-update"
+  gscSubblocks:
+  - block: "gsc-block-to-update"
     subblocks: "0002-0003"
-    nodepoolPrefix: "update-test-nodepool"
+    nodepoolConfig:
+      nodepoolPrefix: "update-test-nodepool"
 `
 			By("Updating the configmap")
 			Expect(k8sClient.Update(ctx, cm)).To(Succeed())
@@ -148,12 +151,13 @@ machineType: "tpu7x"
 				Data: map[string]string{
 					"reservations": `
 - name: "reservation-to-recreate"
-  gscBlocks:
-  - name: "gsc-block-to-recreate"
+  gscSubblocks:
+  - block: "gsc-block-to-recreate"
     subblocks: "0001"
-    nodepoolPrefix: "recreate-test-nodepool"
+    nodepoolConfig:
+      nodepoolPrefix: "recreate-test-nodepool"
 `,
-					"nodepoolConfig": `
+					"defaultNodepoolConfig": `
 machineType: "tpu-v4"
 `,
 				},
@@ -177,7 +181,7 @@ machineType: "tpu-v4"
 			}, timeout, interval).Should(BeTrue())
 
 			// Update the configmap
-			cm.Data["nodepoolConfig"] = `
+			cm.Data["defaultNodepoolConfig"] = `
 machineType: "tpu-v5"
 `
 			By("Updating the configmap with a new machine type")
@@ -216,12 +220,13 @@ machineType: "tpu-v5"
 				Data: map[string]string{
 					"reservations": `
 - name: "res-slice"
-  gscBlocks:
-  - name: "block-slice"
+  gscSubblocks:
+  - block: "block-slice"
     subblocks: "0001"
-    nodepoolPrefix: "slice-test-np"
+    nodepoolConfig:
+      nodepoolPrefix: "slice-test-np"
 `,
-					"nodepoolConfig": `
+					"defaultNodepoolConfig": `
 machineType: "tpu-v4"
 `,
 				},
@@ -317,12 +322,13 @@ machineType: "tpu-v4"
 				Data: map[string]string{
 					"reservations": `
 - name: "res-race"
-  gscBlocks:
-  - name: "block-race"
+  gscSubblocks:
+  - block: "block-race"
     subblocks: "0001"
-    nodepoolPrefix: "old-pool"
+    nodepoolConfig:
+      nodepoolPrefix: "old-pool"
 `,
-					"nodepoolConfig": `
+					"defaultNodepoolConfig": `
 machineType: "tpu-v4"
 `,
 				},
@@ -382,10 +388,11 @@ machineType: "tpu-v4"
 			By("Updating configmap to rename the nodepool (same subblock)")
 			cm.Data["reservations"] = `
 - name: "res-race"
-  gscBlocks:
-  - name: "block-race"
+  gscSubblocks:
+  - block: "block-race"
     subblocks: "0001"
-    nodepoolPrefix: "new-pool"
+    nodepoolConfig:
+      nodepoolPrefix: "new-pool"
 `
 			Expect(k8sClient.Update(ctx, cm)).To(Succeed())
 
@@ -431,6 +438,77 @@ machineType: "tpu-v4"
 				}
 				return false
 			}, timeout, interval).Should(BeTrue(), "new-pool-0001 should be created after capacity is released")
+		})
+	})
+
+	Context("when a static nodepool configmap is created with subblock-specific configurations", func() {
+		It("should create node pools matching their subblock configs", func() {
+			ctx := context.Background()
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      controller.ConfigMapName,
+					Namespace: testNamespace,
+				},
+				Data: map[string]string{
+					"reservations": `
+- name: "reservation-subblock-level"
+  gscSubblocks:
+  - block: "gsc-block-large"
+    subblocks: "0001"
+    nodepoolConfig:
+      nodepoolPrefix: "large-np"
+      machineType: "tpu7x-standard-4t"
+      topology: "4x4x4"
+      nodeCount: 16
+  - block: "gsc-block-small"
+    subblocks: "0001"
+    nodepoolConfig:
+      nodepoolPrefix: "small-np"
+      machineType: "tpu7x-standard-4t"
+      topology: "2x2x2"
+      nodeCount: 4
+`,
+				},
+			}
+
+			// Clean up any existing configmap to avoid AlreadyExists errors
+			_ = k8sClient.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      controller.ConfigMapName,
+					Namespace: testNamespace,
+				},
+			})
+
+			By("Creating a configmap with subblock-specific nodepools")
+			Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+
+			By("Checking that the nodepools were created with correct configurations")
+			Eventually(func() bool {
+				nodePools, err := provider.ListNodePools()
+				if err != nil {
+					return false
+				}
+				foundLarge := false
+				foundSmall := false
+				for _, np := range nodePools {
+					if np.Name == "large-np-0001" {
+						cfg, exists := provider.getConfig("large-np-0001")
+						if exists && cfg.MachineType == "tpu7x-standard-4t" && cfg.Topology == "4x4x4" && cfg.NodeCount == 16 {
+							foundLarge = true
+						}
+					}
+					if np.Name == "small-np-0001" {
+						cfg, exists := provider.getConfig("small-np-0001")
+						if exists && cfg.MachineType == "tpu7x-standard-4t" && cfg.Topology == "2x2x2" && cfg.NodeCount == 4 {
+							foundSmall = true
+						}
+					}
+				}
+				return foundLarge && foundSmall
+			}, timeout, interval).Should(BeTrue(), "Nodepools should be created with correct subblock-level configuration values")
+
+			// Clean up ConfigMap
+			Expect(k8sClient.Delete(ctx, cm)).To(Succeed())
 		})
 	})
 })

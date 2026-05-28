@@ -33,6 +33,7 @@ const (
 )
 
 type StaticNodePoolConfig struct {
+	NodepoolPrefix              string            `yaml:"nodepoolPrefix"`
 	MachineType                 string            `yaml:"machineType"`
 	Accelerator                 string            `yaml:"accelerator"`
 	Topology                    string            `yaml:"topology"`

@@ -41,15 +41,15 @@ const (
 	ConfigMapName = "tpu-provisioner-static-nodepools-config"
 )
 
-type gscBlock struct {
-	Name           string `yaml:"name"`
-	Subblocks      string `yaml:"subblocks"`
-	NodepoolPrefix string `yaml:"nodepoolPrefix"`
+type gscSubblock struct {
+	Block          string                      `yaml:"block"`
+	Subblocks      string                      `yaml:"subblocks"`
+	NodepoolConfig *cloud.StaticNodePoolConfig `yaml:"nodepoolConfig"`
 }
 
 type reservation struct {
-	Name      string     `yaml:"name"`
-	GscBlocks []gscBlock `yaml:"gscBlocks"`
+	Name         string        `yaml:"name"`
+	GscSubblocks []gscSubblock `yaml:"gscSubblocks"`
 }
 
 // StaticNodepoolReconciler reconciles static nodepools based on a configmap.
@@ -97,20 +97,41 @@ func (r *StaticNodepoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	nodepoolConfigYAML, ok := cm.Data["nodepoolConfig"]
-	if !ok {
-		lg.Info("No 'nodepoolConfig' key in configmap. Skipping reconciliation.", "configmap", req.NamespacedName.String())
-		return ctrl.Result{}, nil
+	var defaultConfig *cloud.StaticNodePoolConfig
+	defaultNodepoolConfigYAML, ok := cm.Data["defaultNodepoolConfig"]
+	if ok {
+		var config cloud.StaticNodePoolConfig
+		if err := yaml.Unmarshal([]byte(defaultNodepoolConfigYAML), &config); err != nil {
+			lg.Error(err, "failed to unmarshal defaultNodepoolConfig from configmap", "configmap", req.NamespacedName.String())
+			return ctrl.Result{}, nil
+		}
+		defaultConfig = &config
 	}
 
-	var nodepoolConfig cloud.StaticNodePoolConfig
-	if err := yaml.Unmarshal([]byte(nodepoolConfigYAML), &nodepoolConfig); err != nil {
-		lg.Error(err, "failed to unmarshal nodepoolConfig from configmap", "configmap", req.NamespacedName.String())
+	var hasAnyConfig bool
+	if defaultConfig != nil {
+		hasAnyConfig = true
+	} else {
+		for _, res := range reservations {
+			for _, subblock := range res.GscSubblocks {
+				if subblock.NodepoolConfig != nil {
+					hasAnyConfig = true
+					break
+				}
+			}
+			if hasAnyConfig {
+				break
+			}
+		}
+	}
+
+	if !hasAnyConfig {
+		lg.Info("No default or subblock-level nodepoolConfig found in configmap. Skipping reconciliation.", "configmap", req.NamespacedName.String())
 		return ctrl.Result{}, nil
 	}
 
 	// List nodepools that should exist in the cluster based on the configmap.
-	desiredNodePools, err := r.constructDesiredNodePools(reservations, &nodepoolConfig)
+	desiredNodePools, err := r.constructDesiredNodePools(reservations, defaultConfig)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get desired nodepools from config: %w", err)
 	}
@@ -229,31 +250,96 @@ func (r *StaticNodepoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return ctrl.Result{}, nil
 }
 
-func (r *StaticNodepoolReconciler) constructDesiredNodePools(reservations []reservation, nodepoolConfig *cloud.StaticNodePoolConfig) ([]*cloud.DesiredStaticNodePool, error) {
+func (r *StaticNodepoolReconciler) constructDesiredNodePools(reservations []reservation, defaultConfig *cloud.StaticNodePoolConfig) ([]*cloud.DesiredStaticNodePool, error) {
 	var desiredNodePools []*cloud.DesiredStaticNodePool
 
 	for _, reservation := range reservations {
-		for _, gscBlock := range reservation.GscBlocks {
-			start, end, err := cloud.ParseSubBlocks(gscBlock.Subblocks)
+		for _, gscSubblock := range reservation.GscSubblocks {
+			start, end, err := cloud.ParseSubBlocks(gscSubblock.Subblocks)
 			if err != nil {
-				return nil, fmt.Errorf("parsing subblocks for gscBlock %s: %w", gscBlock.Name, err)
+				return nil, fmt.Errorf("parsing subblocks for gscSubblock %s: %w", gscSubblock.Block, err)
+			}
+
+			// Determine config for this subblock.
+			var subblockConfig *cloud.StaticNodePoolConfig
+			if gscSubblock.NodepoolConfig != nil {
+				subblockConfig = mergeConfig(defaultConfig, gscSubblock.NodepoolConfig)
+			} else {
+				subblockConfig = defaultConfig
+			}
+
+			if subblockConfig == nil {
+				return nil, fmt.Errorf("no nodepool config specified in default or for gscSubblock %s", gscSubblock.Block)
 			}
 
 			for i := start; i <= end; i++ {
-				nodePoolID := utils.SetNodePoolName(gscBlock.NodepoolPrefix, gscBlock.Name, i)
-				subblockName := fmt.Sprintf("%s-subblock-%04d", gscBlock.Name, i)
-				subblockToConsume := fmt.Sprintf("projects/%s/reservations/%s/reservationBlocks/%s/reservationSubBlocks/%s", r.Provider.ProjectID(), reservation.Name, gscBlock.Name, subblockName)
+				nodePoolID := utils.SetNodePoolName(subblockConfig.NodepoolPrefix, gscSubblock.Block, i)
+				subblockName := fmt.Sprintf("%s-subblock-%04d", gscSubblock.Block, i)
+				subblockToConsume := fmt.Sprintf("projects/%s/reservations/%s/reservationBlocks/%s/reservationSubBlocks/%s", r.Provider.ProjectID(), reservation.Name, gscSubblock.Block, subblockName)
 
 				desiredNodePools = append(desiredNodePools, &cloud.DesiredStaticNodePool{
 					Name:              nodePoolID,
 					SubblockToConsume: subblockToConsume,
-					Config:            nodepoolConfig,
+					Config:            subblockConfig,
 				})
 			}
 		}
 	}
 
 	return desiredNodePools, nil
+}
+
+func mergeConfig(global, subblock *cloud.StaticNodePoolConfig) *cloud.StaticNodePoolConfig {
+	if global == nil && subblock == nil {
+		return nil
+	}
+	if global == nil {
+		return subblock
+	}
+	if subblock == nil {
+		return global
+	}
+
+	res := *global
+	if subblock.NodepoolPrefix != "" {
+		res.NodepoolPrefix = subblock.NodepoolPrefix
+	}
+	if subblock.MachineType != "" {
+		res.MachineType = subblock.MachineType
+	}
+	if subblock.Accelerator != "" {
+		res.Accelerator = subblock.Accelerator
+	}
+	if subblock.Topology != "" {
+		res.Topology = subblock.Topology
+	}
+	if subblock.NodeCount != 0 {
+		res.NodeCount = subblock.NodeCount
+	}
+	if len(subblock.NodeLabels) > 0 {
+		if res.NodeLabels == nil {
+			res.NodeLabels = make(map[string]string)
+		}
+		for k, v := range subblock.NodeLabels {
+			res.NodeLabels[k] = v
+		}
+	}
+	if subblock.ShieldedIntegrityMonitoring != nil {
+		res.ShieldedIntegrityMonitoring = subblock.ShieldedIntegrityMonitoring
+	}
+	if subblock.ShieldedSecureBoot != nil {
+		res.ShieldedSecureBoot = subblock.ShieldedSecureBoot
+	}
+	if subblock.MaxPodsPerNode != 0 {
+		res.MaxPodsPerNode = subblock.MaxPodsPerNode
+	}
+	if subblock.EnableAutoRepair != nil {
+		res.EnableAutoRepair = subblock.EnableAutoRepair
+	}
+	if subblock.PlacementPolicy != "" {
+		res.PlacementPolicy = subblock.PlacementPolicy
+	}
+	return &res
 }
 
 // SetupWithManager sets up the controller with the Manager.

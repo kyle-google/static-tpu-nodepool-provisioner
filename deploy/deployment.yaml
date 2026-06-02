@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tpu-provisioner-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tpu-provisioner-controller-manager
+  namespace: tpu-provisioner-system
+  annotations:
+    iam.gke.io/gsa-email: <gsa>
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tpu-provisioner-rolebinding
+subjects:
+- kind: ServiceAccount
+  name: tpu-provisioner-controller-manager
+  namespace: tpu-provisioner-system
+roleRef:
+  kind: ClusterRole
+  name: manager-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tpu-provisioner-controller-manager
+  namespace: tpu-provisioner-system
+  labels:
+    control-plane: controller-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        control-plane: controller-manager
+    spec:
+      serviceAccountName: tpu-provisioner-controller-manager
+      containers:
+      - name: manager
+        image: <image>
+        imagePullPolicy: Always
+        env:
+        - name: PROVIDER
+          value: "gke"
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: GCP_ZONE
+          value: "us-central1-ai1a"
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10

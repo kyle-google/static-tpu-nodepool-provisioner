@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tpu-provisioner-static-nodepools-config
+  namespace: tpu-provisioner-system
+data:
+  reservations: |
+    - name: <reservation_name>
+      gscSubblocks:
+        - block: <block_name>
+          subblocks: "0002"
+          nodepoolConfig:
+            nodepoolPrefix: "joat"
+            machineType: "tpu7x-standard-4t"
+            topology: "2x2x1"
+            nodeCount: 1

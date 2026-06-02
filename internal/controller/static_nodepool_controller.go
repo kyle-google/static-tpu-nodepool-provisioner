@@ -23,8 +23,8 @@ import (
 
 	"github.com/GoogleCloudPlatform/ai-on-gke/static-np-provisioner/copied/api/v1beta1"
 	"github.com/GoogleCloudPlatform/ai-on-gke/static-np-provisioner/internal/cloud"
+	"github.com/GoogleCloudPlatform/ai-on-gke/static-np-provisioner/internal/config"
 	"github.com/GoogleCloudPlatform/ai-on-gke/static-np-provisioner/internal/utils"
-	"gopkg.in/yaml.v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,17 +40,6 @@ import (
 const (
 	ConfigMapName = "tpu-provisioner-static-nodepools-config"
 )
-
-type gscSubblock struct {
-	Block          string                      `yaml:"block"`
-	Subblocks      string                      `yaml:"subblocks"`
-	NodepoolConfig *cloud.StaticNodePoolConfig `yaml:"nodepoolConfig"`
-}
-
-type reservation struct {
-	Name         string        `yaml:"name"`
-	GscSubblocks []gscSubblock `yaml:"gscSubblocks"`
-}
 
 // StaticNodepoolReconciler reconciles static nodepools based on a configmap.
 type StaticNodepoolReconciler struct {
@@ -85,27 +74,10 @@ func (r *StaticNodepoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, fmt.Errorf("failed to get configmap %s: %w", req.NamespacedName.String(), err)
 	}
 
-	reservationsYAML, ok := cm.Data["reservations"]
-	if !ok {
-		lg.Info("No 'reservations' key in configmap. Skipping reconciliation.", "configmap", req.NamespacedName.String())
+	reservations, defaultConfig, err := config.ParseConfigMap(&cm)
+	if err != nil {
+		lg.Error(err, "failed to parse configmap", "configmap", req.NamespacedName.String())
 		return ctrl.Result{}, nil
-	}
-
-	var reservations []reservation
-	if err := yaml.Unmarshal([]byte(reservationsYAML), &reservations); err != nil {
-		lg.Error(err, "failed to unmarshal reservations from configmap", "configmap", req.NamespacedName.String())
-		return ctrl.Result{}, nil
-	}
-
-	var defaultConfig *cloud.StaticNodePoolConfig
-	defaultNodepoolConfigYAML, ok := cm.Data["defaultNodepoolConfig"]
-	if ok {
-		var config cloud.StaticNodePoolConfig
-		if err := yaml.Unmarshal([]byte(defaultNodepoolConfigYAML), &config); err != nil {
-			lg.Error(err, "failed to unmarshal defaultNodepoolConfig from configmap", "configmap", req.NamespacedName.String())
-			return ctrl.Result{}, nil
-		}
-		defaultConfig = &config
 	}
 
 	var hasAnyConfig bool
@@ -250,7 +222,7 @@ func (r *StaticNodepoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return ctrl.Result{}, nil
 }
 
-func (r *StaticNodepoolReconciler) constructDesiredNodePools(reservations []reservation, defaultConfig *cloud.StaticNodePoolConfig) ([]*cloud.DesiredStaticNodePool, error) {
+func (r *StaticNodepoolReconciler) constructDesiredNodePools(reservations []config.Reservation, defaultConfig *cloud.StaticNodePoolConfig) ([]*cloud.DesiredStaticNodePool, error) {
 	var desiredNodePools []*cloud.DesiredStaticNodePool
 
 	for _, reservation := range reservations {
@@ -263,7 +235,7 @@ func (r *StaticNodepoolReconciler) constructDesiredNodePools(reservations []rese
 			// Determine config for this subblock.
 			var subblockConfig *cloud.StaticNodePoolConfig
 			if gscSubblock.NodepoolConfig != nil {
-				subblockConfig = mergeConfig(defaultConfig, gscSubblock.NodepoolConfig)
+				subblockConfig = config.MergeConfig(defaultConfig, gscSubblock.NodepoolConfig)
 			} else {
 				subblockConfig = defaultConfig
 			}
@@ -287,59 +259,6 @@ func (r *StaticNodepoolReconciler) constructDesiredNodePools(reservations []rese
 	}
 
 	return desiredNodePools, nil
-}
-
-func mergeConfig(global, subblock *cloud.StaticNodePoolConfig) *cloud.StaticNodePoolConfig {
-	if global == nil && subblock == nil {
-		return nil
-	}
-	if global == nil {
-		return subblock
-	}
-	if subblock == nil {
-		return global
-	}
-
-	res := *global
-	if subblock.NodepoolPrefix != "" {
-		res.NodepoolPrefix = subblock.NodepoolPrefix
-	}
-	if subblock.MachineType != "" {
-		res.MachineType = subblock.MachineType
-	}
-	if subblock.Accelerator != "" {
-		res.Accelerator = subblock.Accelerator
-	}
-	if subblock.Topology != "" {
-		res.Topology = subblock.Topology
-	}
-	if subblock.NodeCount != 0 {
-		res.NodeCount = subblock.NodeCount
-	}
-	if len(subblock.NodeLabels) > 0 {
-		if res.NodeLabels == nil {
-			res.NodeLabels = make(map[string]string)
-		}
-		for k, v := range subblock.NodeLabels {
-			res.NodeLabels[k] = v
-		}
-	}
-	if subblock.ShieldedIntegrityMonitoring != nil {
-		res.ShieldedIntegrityMonitoring = subblock.ShieldedIntegrityMonitoring
-	}
-	if subblock.ShieldedSecureBoot != nil {
-		res.ShieldedSecureBoot = subblock.ShieldedSecureBoot
-	}
-	if subblock.MaxPodsPerNode != 0 {
-		res.MaxPodsPerNode = subblock.MaxPodsPerNode
-	}
-	if subblock.EnableAutoRepair != nil {
-		res.EnableAutoRepair = subblock.EnableAutoRepair
-	}
-	if subblock.PlacementPolicy != "" {
-		res.PlacementPolicy = subblock.PlacementPolicy
-	}
-	return &res
 }
 
 // SetupWithManager sets up the controller with the Manager.

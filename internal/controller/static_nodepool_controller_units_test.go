@@ -5,6 +5,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/ai-on-gke/static-np-provisioner/copied/api/v1beta1"
 	"github.com/GoogleCloudPlatform/ai-on-gke/static-np-provisioner/internal/cloud"
+	"github.com/GoogleCloudPlatform/ai-on-gke/static-np-provisioner/internal/config"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -130,10 +131,10 @@ func TestConstructDesiredNodePools(t *testing.T) {
 	}
 
 	t.Run("default config fallback", func(t *testing.T) {
-		reservations := []reservation{
+		reservations := []config.Reservation{
 			{
 				Name: "res-1",
-				GscSubblocks: []gscSubblock{
+				GscSubblocks: []config.GscSubblock{
 					{
 						Block:     "block-alpha",
 						Subblocks: "0001-0002",
@@ -172,10 +173,10 @@ func TestConstructDesiredNodePools(t *testing.T) {
 	})
 
 	t.Run("subblock override merges with default config", func(t *testing.T) {
-		reservations := []reservation{
+		reservations := []config.Reservation{
 			{
 				Name: "res-1",
-				GscSubblocks: []gscSubblock{
+				GscSubblocks: []config.GscSubblock{
 					{
 						Block:     "block-alpha",
 						Subblocks: "0001-0001",
@@ -225,10 +226,10 @@ func TestConstructDesiredNodePools(t *testing.T) {
 	})
 
 	t.Run("subblock level config only without default config", func(t *testing.T) {
-		reservations := []reservation{
+		reservations := []config.Reservation{
 			{
 				Name: "res-1",
-				GscSubblocks: []gscSubblock{
+				GscSubblocks: []config.GscSubblock{
 					{
 						Block:     "block-alpha",
 						Subblocks: "0001-0001",
@@ -262,10 +263,10 @@ func TestConstructDesiredNodePools(t *testing.T) {
 	})
 
 	t.Run("missing configuration error", func(t *testing.T) {
-		reservations := []reservation{
+		reservations := []config.Reservation{
 			{
 				Name: "res-1",
-				GscSubblocks: []gscSubblock{
+				GscSubblocks: []config.GscSubblock{
 					{
 						Block:     "block-alpha",
 						Subblocks: "0001-0001",
